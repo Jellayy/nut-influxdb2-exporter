@@ -22,40 +22,53 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install semantic-release and plugins
+      - name: Install semantic-release
         run: |
-          npm install \
-            semantic-release \
-            @semantic-release/changelog \
-            @semantic-release/git \
-            @semantic-release/github # You might need more plugins based on your commit conventions
+          npm install semantic-release
 
       - name: Determine next version and publish release
         id: semantic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          npx semantic-release
-
+          RELEASE_INFO=$(npx semantic-release)
+          echo "$RELEASE_INFO"
+          
+          # Check if nextRelease.version exists in the JSON output
+          if echo "$RELEASE_INFO" | grep -q '"nextRelease":'; then
+            NEXT_VERSION=$(echo "$RELEASE_INFO" | jq -r '.nextRelease.version // empty')
+            if [ -n "$NEXT_VERSION" ]; then
+              echo "A new release was published: $NEXT_VERSION"
+              echo "new_release_version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+            else
+              echo "No new release detected or version not found."
+              echo "new_release_version=" >> "$GITHUB_OUTPUT" # Ensure output is empty
+            fi
+          else
+            echo "No 'nextRelease' object in semantic-release output, likely no new release."
+            echo "new_release_version=" >> "$GITHUB_OUTPUT" # Ensure output is empty
+          fi
+        shell: bash
+        
       - name: Log in to Docker Hub
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: success() && steps.semantic.outputs.new_release_version != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: success() && steps.semantic.outputs.new_release_version != ''
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: jellayy/nut-influxdb2-exporter
           tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ steps.semantic.outputs.new_release_published == 'true' }}
+            type=raw,value=${{ steps.semantic.outputs.new_release_version }}
+            type=raw,value=latest
 
       - name: Build and push Docker image
-        if: steps.semantic.outputs.new_release_published == 'true'
+        if: success() && steps.semantic.outputs.new_release_version != ''
         uses: docker/build-push-action@v5
         with:
           context: .
